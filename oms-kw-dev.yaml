@@ -1,0 +1,403 @@
+#oms-kw-dev -> Test Tito
+kind: Service
+apiVersion: v1
+metadata:
+  name: oms-kw-dev
+  namespace: kw-dev
+  labels:
+    app.kubernetes.io/name: oms
+    app.kubernetes.io/instance: kw-dev
+    app.kubernetes.io/createdby: k8sadminportal
+spec:
+  selector:
+    app.kubernetes.io/name: oms
+    app.kubernetes.io/instance: kw-dev
+  ports:
+  - name: http
+    protocol: TCP
+    port: 8080
+    targetPort: http   
+  - name: jboss
+    protocol: TCP
+    port: 9990
+    targetPort: jboss
+  - name: svn
+    protocol: TCP
+    port: 80
+    targetPort: svnhttp    
+  - name: debuging
+    protocol: TCP
+    port: 8787
+    targetPort: debuging
+  - name: keycloak
+    protocol: TCP
+    port: 8081
+  - name: keycloakmng
+    protocol: TCP
+    port: 9991
+  type: NodePort
+---
+#Ingress
+kind: Ingress
+apiVersion: networking.k8s.io/v1
+metadata:
+  name: oms-kw-dev
+  namespace: kw-dev
+  labels:
+    app.kubernetes.io/name: oms
+    app.kubernetes.io/instance: kw-dev
+    app.kubernetes.io/createdby: kwsoft
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "200m"
+    nginx.ingress.kubernetes.io/whitelist-source-range: 0.0.0.0/0
+    cert-manager.io/cluster-issuer: letsencrypt
+spec:
+   tls:
+   - hosts:
+     - oms-kw-dev.switzerlandnorth.cloudapp.azure.com
+     secretName: tls-sec-kw-dev
+   rules:
+   - host: oms-kw-dev.switzerlandnorth.cloudapp.azure.com
+     http:
+       paths:
+       - path: /
+         pathType: Prefix
+         backend:
+           service:
+             name: oms-kw-dev
+             port:
+               number: 8080
+      # - path: /cockpit
+      #   pathType: Prefix
+      #   backend:
+      #     service:
+      #       name: oms-kw-dev
+      #       port:
+      #         number: 8080
+      # - path: /contenthub
+      #   pathType: Prefix
+      #   backend:
+      #     service:
+      #       name: oms-kw-dev
+      #       port:
+      #         number: 8080                            
+       - path: /auth
+         pathType: Prefix
+         backend:
+           service:
+             name: oms-kw-dev
+             port:
+               number: 8081
+       - path: /keycloakmng
+         pathType: Prefix
+         backend:
+           service:
+             name: oms-kw-dev
+             port:
+               number: 9991
+      # - path: /console
+      #   pathType: Prefix
+      #   backend:
+      #     service:
+      #       name: oms-kw-dev
+      #       port:
+      #         number: 9990 
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: oms-kw-dev
+  namespace: kw-dev
+  metadata:
+  annotations:
+    MTEXT_VERSION: MTEXTCS_6.13
+  creationTimestamp: null
+  labels:
+    app.kubernetes.io/name: oms
+    app.kubernetes.io/instance: kw-dev
+    app.kubernetes.io/createdby: k8sadminportal
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: oms
+      app.kubernetes.io/instance: kw-dev
+  template:
+    metadata:
+      creationTimestamp: null
+      labels:
+        app.kubernetes.io/name: oms
+        app.kubernetes.io/instance: kw-dev
+    spec:     
+      # affinity:
+      #   nodeAffinity:
+      #     requiredDuringSchedulingIgnoredDuringExecution:
+      #       nodeSelectorTerms:
+      #       - matchExpressions:
+      #         - key: kubernetes.io/hostname
+      #           operator: In
+      #           values:
+      #           - kube02
+      imagePullSecrets:
+        - name: registry-omscloud-credentials
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 0
+        fsGroup: 0
+        supplementalGroups: [1000]
+      initContainers:
+      - name: wildfly-init
+        image: registry.omscloud.eu/kwsoft/wildfly26_init:4
+        imagePullPolicy: Always
+        command: ["/bin/sh"]
+        args: ["-c", "/home/init.sh"]
+        # Erweitert
+        env:
+        - name: DRIVER_CLASS
+          value: postgresql
+        volumeMounts:
+        - mountPath: /configuration
+          name: aksvolume
+          subPath: oms-kw-dev/jboss-config
+      - name: seriem
+        image: registry.omscloud.eu/kwsoft/seriem613:361
+        imagePullPolicy: IfNotPresent
+        command: ["/bin/sh"]
+        args: ["-c", "/home/volumes_init.sh"]
+        env:
+        - name: EXTERNAL_HOST_NAME
+          value: oms-kw-dev.switzerlandnorth.cloudapp.azure.com
+        - name: EXTERNAL_HOST_PORT
+          value: "443"
+        - name: DEFAULT_WORKSPACE
+          value: "false"
+        - name: WS_ONLY
+          value: "true"
+        volumeMounts:
+        - mountPath: /deployments
+          name: aksvolume
+          subPath: oms-kw-dev/deployments
+        - mountPath: /clients
+          name: aksvolume
+          subPath: oms-kw-dev/clients
+        - mountPath: /postgres-init
+          name: aksvolume
+          subPath: oms-kw-dev/postgres-init   
+        - mountPath: /seriem
+          name: aksvolume
+          subPath: oms-kw-dev/seriem-home          
+        - mountPath: /mtext-init
+          name: aksvolume
+          subPath: oms-kw-dev/mtext-init  
+      containers:
+      - name: keycloak
+        image: quay.io/keycloak/keycloak:19.0.3-legacy
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: KEYCLOAK_LOGLEVEL
+          value: ERROR
+        - name: ROOT_LOGLEVEL
+          value: ERROR
+        - name: KC_METRICS_ENABLED
+          value: "true"
+        - name: KC_HEALTH_ENABLED
+          value: "true"
+        - name: KEYCLOAK_USER
+          valueFrom:
+            secretKeyRef:
+              name:  keycloak-secret
+              key: username
+              optional: false
+        - name: KEYCLOAK_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name:  keycloak-secret
+              key: password
+              optional: false
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name:  keycloak-secret
+              key: db_username
+              optional: false
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name:  keycloak-secret
+              key: db_password
+              optional: false
+        - name: PROXY_ADDRESS_FORWARDING
+          value: "true"
+        - name: JAVA_OPTS
+          # value: "-Dkeycloak.profile.feature.upload_scripts=enabled -Djboss.http.port=8081 -Djboss.https.port=9443 -Djboss.management.http.port=9991 -Djboss.bind.address.management=0.0.0.0 -Djboss.bind.address=0.0.0.0 -Djava.net.preferIPv4Stack=true -Xmx500m"
+          value: "-Djboss.http.port=8081 -Djboss.https.port=9443 -Djboss.management.http.port=9991 -Djboss.bind.address.management=0.0.0.0 -Djboss.bind.address=0.0.0.0 -Djava.net.preferIPv4Stack=true"
+        # resources:
+        #   requests:
+        #     memory: "200Mi"
+        #     cpu: "1000m"            
+        #   limits:
+        #     memory: "1096Mi"
+        #     cpu: "1000m"
+        ports:
+        - containerPort: 8081
+          name: keycloak
+          protocol: TCP
+        - containerPort: 9991
+          name: keycloakmng
+          protocol: TCP
+        volumeMounts:
+        - mountPath: /opt/jboss/keycloak/standalone/data/
+          name: aksvolume
+          subPath: oms-kw-dev/keycloak-data
+        - mountPath: /opt/jboss/keycloak/themes/custom
+          name: aksvolume
+          subPath: oms-kw-dev/keycloak-theme
+      - name: wildfly
+        image: registry.omscloud.eu/kwsoft/wildfly26:4
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        - containerPort: 8443
+          name: https
+          protocol: TCP
+        - containerPort: 9990
+          name: jboss
+          protocol: TCP
+        #- containerPort: 8787
+        #  name: debuging
+        #  protocol: TCP
+        env:
+        - name: EXTERNAL_HOST_NAME
+          value: oms-kw-dev.switzerlandnorth.cloudapp.azure.com
+        - name: EXTERNAL_HOST_PORT
+          value: "443"
+        # Erweitert start
+        - name: CONNECTION_URL
+          value: jdbc:postgresql://oms-kw-test-db.postgres.database.azure.com:5432/seriem
+        - name: USER_NAME
+          valueFrom:
+            secretKeyRef:
+              name: postgres-credentials
+              key: databaseUsername
+        - name: PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgres-credentials
+              key: databasePassword
+        - name: DRIVER_CLASS
+          value: postgresql
+        # Erweitert ende
+        - name: DB_SCHEMA
+          value: "mtext"
+        - name: WS_HOST_NAME
+          value: oms-kw-dev.switzerlandnorth.cloudapp.azure.com
+        - name: WS_HTTP_PROTOCOL
+          value: "https"
+        - name: JBOSS_CONFIG
+          value: "standalone-full.xml"
+        - name: WEB_ACCESSED_DIR
+          value: "/home/seriem/server/"
+        - name: CONTENT_HUB_URL
+          value: "https://dev.azure.com/oms-kw-dev/_git/seriem"
+        - name: ANOTHER_JAVA_OPTS
+          #value: "-XX:MaxMetaspaceSize=768m -Xmx1792m -XX:NativeMemoryTracking=summary -XX:+PrintFlagsFinal -XX:+PrintFlagsFinal -XX:MaxRAM=$(($(cat /sys/fs/cgroup/memory/memory.limit_in_bytes)*90/100)) -XX:CompressedClassSpaceSize=300m"
+          value: "-XX:MaxMetaspaceSize=512m -Xmx3072m -XX:NativeMemoryTracking=summary -XX:+PrintFlagsFinal -XX:+PrintFlagsFinal -XX:MaxRAM=$(($(cat /sys/fs/cgroup/memory/memory.limit_in_bytes)*95/100)) -agentlib:jdwp=transport=dt_socket,address=8787,server=y,suspend=n -Djava.net.preferIPv4Stack=true"
+        startupProbe:
+          #httpGet:
+          #  path: /mtext-integration-adapter/version-info
+          #  port: 8080
+          # Erweitert start
+          tcpSocket:
+            port: 8080
+          # Erweitert ende
+          failureThreshold: 6
+          periodSeconds: 10
+        readinessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /moms-integration-adapter/version-info
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          timeoutSeconds: 5
+        livenessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /moms-integration-adapter/version-info
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          timeoutSeconds: 5
+        resources:
+          requests:
+            memory: "2048Mi"
+            cpu: "2000m"       
+          limits:
+            memory: "4096Mi"
+            cpu: "3000m"
+        volumeMounts:
+        - mountPath: /home/seriem/
+          name: aksvolume
+          subPath: oms-kw-dev/seriem-home
+        - mountPath: /opt/jboss/wildfly/standalone/deployments/
+          name: aksvolume
+          subPath: oms-kw-dev/deployments
+        - mountPath: /home/clients/
+          name: aksvolume
+          subPath: oms-kw-dev/clients
+        - mountPath: /opt/jboss/wildfly/standalone/configuration/
+          name: aksvolume
+          subPath: oms-kw-dev/jboss-config
+        - mountPath: /opt/jboss/wildfly/standalone/log/
+          name: aksvolume
+          subPath: oms-kw-dev/jboss-log
+        - mountPath: /home/mtext-init
+          name: aksvolume
+          subPath: oms-kw-dev/mtext-init
+      hostAliases:
+      - ip: "127.0.0.1"
+        hostnames:
+        - "db"
+        - "git"     
+        - "svn"
+      #- ip: "10.1.7.1"
+      #  hostnames:
+      #  - "subversion.hq.kwsoft.de"
+      volumes:
+      - name: aksvolume
+        persistentVolumeClaim:
+          claimName: oms-kw-dev                    
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: oms-kw-dev
+  namespace: kw-dev
+  annotations:
+    volume.beta.kubernetes.io/storage-class: managed
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: keycloak-secret
+  namespace: kw-dev
+type: Opaque
+data:
+  username: YWRtaW4=
+  password: YWRtaW4=
+  db_username: ZGF0YWJhc2U=
+  db_password: ZGF0YWJhc2U=
+---
+          
